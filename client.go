@@ -56,27 +56,56 @@ func NewClient(addr string) (*Client, error) {
 // NewClientWithConfig creates and returns a Client which is connected to the provided addr using
 // the provided [ClientConfig].
 func NewClientWithConfig(addr string, config ClientConfig) (*Client, error) {
-	// Set the timeout for dialing and requests based on the provided config, falling back on the
-	// default value.
-	timeout := config.Timeout
-	if timeout == 0 {
-		timeout = DefaultClientTimeout
-	}
-
-	// Opent the TCP connection to the RCON server.
-	conn, err := net.DialTimeout("tcp", addr, timeout)
-	if err != nil {
-		return nil, err
-	}
-
 	c := &Client{
-		conn:                   conn,
-		timeout:                timeout,
+		timeout:                config.Timeout,
 		logger:                 config.Logger,
 		logOutboundAuthPackets: config.LogOutboundAuthPackets,
 	}
 
+	err := c.connect(addr)
+	if err != nil {
+		return nil, err
+	}
+
 	return c, nil
+}
+
+// connect opens a TCP connection to the RCON server and replaces the receiving Client's underlying
+// connection with the newly opened connection.
+func (c *Client) connect(addr string) error {
+	timeout := c.timeout
+	if timeout == 0 {
+		timeout = DefaultClientTimeout
+	}
+
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// If a connection already exists, try to be nice and close it.
+	if c.conn != nil {
+		_ = c.conn.Close()
+	}
+
+	c.conn = conn
+	return nil
+}
+
+// Reconnect opens a new connection to the RCON server.
+func (c *Client) Reconnect() error {
+	return c.connect(c.conn.RemoteAddr().String())
+}
+
+// Close attempts to close the existing connection to the RCON server.
+func (c *Client) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.conn.Close()
 }
 
 // Request sends the provided [Packet] to the RCON server and returns a response [Packet] provided
