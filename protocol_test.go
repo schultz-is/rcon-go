@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestPacketMarshalUnmarshalBinary(t *testing.T) {
+func TestBinaryFormatting(t *testing.T) {
 	ps := []Packet{
 		Packet{}, // Empty packet
 		Packet{1, PacketTypeAuth, []byte("password")},                                     // Example authorization request
@@ -20,31 +20,56 @@ func TestPacketMarshalUnmarshalBinary(t *testing.T) {
 	}
 
 	for _, p := range ps {
-		// Ensure the packet marshals without error.
 		b, err := p.MarshalBinary()
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("Packet[%#v].MarshalBinary() failed unexpectedly: %s", p, err)
+		}
+
+		var buf bytes.Buffer
+		n, err := p.WriteTo(&buf)
+		if err != nil {
+			t.Fatalf("Packet[%#v].WriteTo() failed unexpectedly: %s", p, err)
 		}
 
 		// Ensure MarshalBinary is a pure function.
 		b2, err := p.MarshalBinary()
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("Packet[%#v].MarshalBinary() failed unexpectedly: %s", p, err)
 		}
 		if !bytes.Equal(b, b2) {
-			t.Fatalf("Packet.MarshalBinary()[%#v] got two different results: %0x, %0x", p, b, b2)
+			t.Fatalf("Packet[%#v].MarshalBinary() got two different results: %0x, %0x", p, b, b2)
 		}
 
-		// Ensure the resulting bytes unmarshal without error.
+		// Ensure WriteTo is a pure function.
+		var buf2 bytes.Buffer
+		n2, err := p.WriteTo(&buf2)
+		if err != nil {
+			t.Fatalf("Packet[%#v].WriteTo() failed unexpectedly: %s", p, err)
+		}
+		if n != n2 || !bytes.Equal(buf.Bytes(), buf2.Bytes()) {
+			t.Fatalf("Packet[%#v].WriteTo() got two different results: %0x, %0x", p, buf.Bytes(), buf2.Bytes())
+		}
+
 		var p2 Packet
 		err = p2.UnmarshalBinary(b)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("Packet.UnmarshalBinary(%0x) failed unexpectedly: %s", b, err)
+		}
+
+		var p3 Packet
+		n3, err := p3.ReadFrom(&buf)
+		if err != nil {
+			t.Fatalf("Packet.ReadFrom(%0x) failed unexpectedly: %s", buf.Bytes(), err)
 		}
 
 		// Check that MarshalBinary is the identity function.
 		if !p.EqualTo(p2) {
-			t.Fatalf("Packet[%#v] != Packet.MarshalBianry()[%#v].UnmarshalBinary()", p, p2)
+			t.Fatalf("Packet[%#v].MarshalBinary() is not the identity function, got: %#v", p, p2)
+		}
+
+		// Ensure WriteTo is the identity function.
+		if n != n3 || !p.EqualTo(p3) {
+			t.Fatalf("Packet[%#v].WriteTo() is not the identity function, got: %#v", p, p3)
 		}
 	}
 
@@ -52,7 +77,7 @@ func TestPacketMarshalUnmarshalBinary(t *testing.T) {
 	p := Packet{Body: make([]byte, MaximumPacketSize)}
 	_, err := p.MarshalBinary()
 	if err == nil {
-		t.Fatalf("Packet.MarshalBinary()[%#v] succeeded incorrectly", p)
+		t.Fatalf("Packet[%#v].MarshalBinary() succeeded incorrectly", p)
 	}
 
 	bss := []string{
