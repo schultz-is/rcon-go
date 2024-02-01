@@ -183,3 +183,14 @@ func (p Packet) EqualTo(p2 Packet) bool {
 	}
 	return true
 }
+
+// Clone duplicates a Packet; including a new copy of the body.
+func (p Packet) Clone() Packet {
+	p2 := Packet{
+		ID:   p.ID,
+		Type: p.Type,
+		Body: make([]byte, len(p.Body)),
+	}
+	_ = copy(p2.Body, p.Body)
+	return p2
+}

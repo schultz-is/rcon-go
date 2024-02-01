@@ -104,6 +104,27 @@ func TestBinaryFormatting(t *testing.T) {
 	}
 }
 
+func TestPacketEqualTo(t *testing.T) {
+	p := Packet{}
+	if !p.EqualTo(p) {
+		t.Fatalf("Packet[%#v].EqualTo(%#v) returned false when comparing a packet to itself", p, p)
+	}
+
+	p = Packet{
+		ID:   12345,
+		Type: PacketTypeResponseValue,
+		Body: []byte("some command response value goes here..."),
+	}
+	if !p.EqualTo(p) {
+		t.Fatalf("Packet[%#v].EqualTo(%#v) returned false when comparing a packet to itself", p, p)
+	}
+
+	p2 := p.Clone()
+	if !p.EqualTo(p2) {
+		t.Fatalf("Packet[%v].EqualTo(%#v) returned false when comparing a packet to a clone of itself", p, p2)
+	}
+}
+
 func BenchmarkMarshalBinary(b *testing.B) {
 	bodySizes := []int{
 		0,
