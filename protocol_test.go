@@ -121,7 +121,24 @@ func TestPacketEqualTo(t *testing.T) {
 
 	p2 := p.Clone()
 	if !p.EqualTo(p2) {
-		t.Fatalf("Packet[%v].EqualTo(%#v) returned false when comparing a packet to a clone of itself", p, p2)
+		t.Fatalf("Packet[%#v].EqualTo(%#v) returned false when comparing a packet to a clone of itself", p, p2)
+	}
+
+	p2.ID = p.ID - 1
+	if p.EqualTo(p2) {
+		t.Fatalf("Packet[%#v].EqualTo(%#v) incorrectly returned true for different IDs", p, p2)
+	}
+
+	p2.ID = p.ID
+	p2.Type = p.Type + 1
+	if p.EqualTo(p2) {
+		t.Fatalf("Packet[%#v].EqualTo(%#v) incorrectly returned true for different types", p, p2)
+	}
+
+	p2.Type = p.Type
+	p2.Body = append(p.Body, 'X')
+	if p.EqualTo(p2) {
+		t.Fatalf("Packet[%#v].EqualTo(%#v) incorrectly returned true for different bodies", p, p2)
 	}
 }
 
