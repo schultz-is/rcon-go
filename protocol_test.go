@@ -1,4 +1,4 @@
-package rcon
+package rcon_test
 
 import (
 	"bytes"
@@ -6,17 +6,19 @@ import (
 	"math"
 	"strconv"
 	"testing"
+
+	"github.com/schultz-is/rcon-go"
 )
 
 func TestBinaryFormatting(t *testing.T) {
-	ps := []Packet{
-		Packet{}, // Empty packet
-		Packet{1, PacketTypeAuth, []byte("password")},                                     // Example authorization request
-		Packet{2, PacketTypeAuthResponse, nil},                                            // Example successful authorization response
-		Packet{-1, PacketTypeAuthResponse, nil},                                           // Example unsuccessful authorization response
-		Packet{3, PacketTypeExecCommand, []byte("info")},                                  // Example command request
-		Packet{4, PacketTypeResponseValue, []byte("server info goes here")},               // Example command response
-		Packet{math.MaxInt32, math.MaxInt32, make([]byte, MaximumPacketSize-WrapperSize)}, // Largest packet allowed, non-standard type field
+	ps := []rcon.Packet{
+		rcon.Packet{}, // Empty packet
+		rcon.Packet{1, rcon.PacketTypeAuth, []byte("password")},                                          // Example authorization request
+		rcon.Packet{2, rcon.PacketTypeAuthResponse, nil},                                                 // Example successful authorization response
+		rcon.Packet{-1, rcon.PacketTypeAuthResponse, nil},                                                // Example unsuccessful authorization response
+		rcon.Packet{3, rcon.PacketTypeExecCommand, []byte("info")},                                       // Example command request
+		rcon.Packet{4, rcon.PacketTypeResponseValue, []byte("server info goes here")},                    // Example command response
+		rcon.Packet{math.MaxInt32, math.MaxInt32, make([]byte, rcon.MaximumPacketSize-rcon.WrapperSize)}, // Largest packet allowed, non-standard type field
 	}
 
 	for _, p := range ps {
@@ -50,13 +52,13 @@ func TestBinaryFormatting(t *testing.T) {
 			t.Fatalf("Packet[%#v].WriteTo() got two different results: %0x, %0x", p, buf.Bytes(), buf2.Bytes())
 		}
 
-		var p2 Packet
+		var p2 rcon.Packet
 		err = p2.UnmarshalBinary(b)
 		if err != nil {
 			t.Fatalf("Packet.UnmarshalBinary(%0x) failed unexpectedly: %s", b, err)
 		}
 
-		var p3 Packet
+		var p3 rcon.Packet
 		n3, err := p3.ReadFrom(&buf)
 		if err != nil {
 			t.Fatalf("Packet.ReadFrom(%0x) failed unexpectedly: %s", buf.Bytes(), err)
@@ -74,7 +76,7 @@ func TestBinaryFormatting(t *testing.T) {
 	}
 
 	// Disallow packets above the maximum packet size defined by the protocol.
-	p := Packet{Body: make([]byte, MaximumPacketSize)}
+	p := rcon.Packet{Body: make([]byte, rcon.MaximumPacketSize)}
 	_, err := p.MarshalBinary()
 	if err == nil {
 		t.Fatalf("Packet[%#v].MarshalBinary() succeeded incorrectly", p)
@@ -96,7 +98,7 @@ func TestBinaryFormatting(t *testing.T) {
 		}
 
 		// Expect the unmarshal to fail.
-		var p Packet
+		var p rcon.Packet
 		err = p.UnmarshalBinary(b)
 		if err == nil {
 			t.Fatalf("Packet.UnmarshalBinary(%0x) succeeded incorrectly", b)
@@ -105,14 +107,14 @@ func TestBinaryFormatting(t *testing.T) {
 }
 
 func TestPacketEqualTo(t *testing.T) {
-	p := Packet{}
+	p := rcon.Packet{}
 	if !p.EqualTo(p) {
 		t.Fatalf("Packet[%#v].EqualTo(%#v) returned false when comparing a packet to itself", p, p)
 	}
 
-	p = Packet{
+	p = rcon.Packet{
 		ID:   12345,
-		Type: PacketTypeResponseValue,
+		Type: rcon.PacketTypeResponseValue,
 		Body: []byte("some command response value goes here..."),
 	}
 	if !p.EqualTo(p) {
@@ -154,7 +156,7 @@ func BenchmarkMarshalBinary(b *testing.B) {
 		500,
 		1000,
 		2000,
-		MaximumPacketSize - WrapperSize,
+		rcon.MaximumPacketSize - rcon.WrapperSize,
 	}
 
 	for _, bodySize := range bodySizes {
@@ -162,7 +164,7 @@ func BenchmarkMarshalBinary(b *testing.B) {
 			strconv.Itoa(bodySize),
 			func(b *testing.B) {
 				for n := 0; n < b.N; n++ {
-					p := Packet{
+					p := rcon.Packet{
 						Body: make([]byte, bodySize),
 					}
 					bs, err := p.MarshalBinary()
