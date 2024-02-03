@@ -10,7 +10,7 @@ import (
 	"github.com/schultz-is/rcon-go"
 )
 
-func TestBinaryFormatting(t *testing.T) {
+func TestPacketBinaryFormatting(t *testing.T) {
 	ps := []rcon.Packet{
 		rcon.Packet{}, // Empty packet
 		rcon.Packet{1, rcon.PacketTypeAuth, []byte("password")},                                          // Example authorization request
