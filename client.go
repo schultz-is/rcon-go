@@ -12,95 +12,71 @@ import (
 	"time"
 )
 
-// DefaultClientTimeout is the default time allowed for a client to both connect to an RCON server
-// and to perform a request/response round trip.
+// DefaultClientTimeout is the default amount of time allowed for a client to make a request and
+// response round trip.
 const DefaultClientTimeout = 15 * time.Second
 
-// Client is an RCON client that manages a single connection to an RCON server. Client instances
-// are safe for concurrent use, but should be pooled in cases of high-throughput to avoid
-// contention. The RCON protocol does not specify any keep alive functionality, so a Client may
-// return an EOF if unused for an extended period.
+// Client is an RCON client that manages a single connection to an RCON server. While the RCON
+// protocol specifies transport over TCP, this client allows transport over anything that satisfies
+// the [net.Conn] interface. There are a few reasons this might be useful to a consumer of this
+// package:
+//  1. RCON is unencrypted by default, which means the authorization password is written over the
+//     wire in plain test. The [crypto/tls.Conn] satisfies the [net.Conn] interface and can be
+//     supplied to this client to encrypt RCON traffic seamlessly. This is of course only possible
+//     when the RCON server is also using TLS.
+//  2. In the case the RCON server and client are running on the same machine, it may be useful to
+//     communicate over a Unix socket (or other IPC communication transport,) rather than a full
+//     TCP socket.
+//  3. Providing a [net.Conn] that the caller controls allows for logging, debugging, and
+//     packet modification outside the scope of the client.
+//
+// Clients are safe for concurrent use, but should likely be pooled to avoid contention in
+// high-throughput scenarios.
+//
+// RCON does not specify any keep alive functionality, so a client may return an EOF or similar
+// error when idle for an extended period.
 type Client struct {
-	// The seq field tracks the monotonically increasing packet ID that a Client sends to servers in
-	// a request. This will be a positive value between zero and [math.MaxInt32] inclusive.
+	// seq tracks the monotonically increasing packet ID that a client sends to servers with each
+	// request. This will be a positive value between zero and [math.MaxInt32] inclusive.
 	seq atomic.Int32
 
-	// The mu field controls access to the underlying TCP connection of a Client.
+	// mu controls concurrent access to the underlying connection.
 	mu sync.Mutex
 
-	// The conn field is the TCP transport used by a Client instance to communicate with an RCON
-	// server.
+	// conn is the underlying connection RCON messages are sent and received over.
 	conn net.Conn
 
-	// timeout limits the amount of time a Client can spend connecting to an RCON server and the
-	// amount of time a Client can spend performing a request/response round trip. When this is zero,
-	// the default client timeout will be used.
+	// timeout is a limit on the time allowed for a client to perform a request and response round
+	// trip.
 	timeout time.Duration
 
-	// logger is a [slog.Logger] that a Client instance writes log messages to. When the logger is
-	// nil, log operations are essentially NOPs.
+	// logger receives any log output from a client.
 	logger *slog.Logger
 
 	// logOutboundAuthPackets is a flag that must be explicitly enabled when the client is created.
 	// This field enables debug logging to include outbound authorization request packets, exposing
-	// server passwords in plaintext. Only enable this flag if you are aware of the implications and
-	// are willing to accept the risks!
+	// server passwords in plaintext. When this field is false (the default value,) outbound
+	// authorization packets will be sanitized to hide both the password text and packet length.
+	//
+	// WARNING: Only enable this flag if you are aware of the implications and are willing to accept
+	// the risks!
 	logOutboundAuthPackets bool
 }
 
-// NewClient creates and returns a Client which is connected to the provided addr.
-func NewClient(addr string) (*Client, error) {
-	return NewClientWithConfig(addr, ClientConfig{})
-}
-
-// NewClientWithConfig creates and returns a Client which is connected to the provided addr using
-// the provided [ClientConfig].
-func NewClientWithConfig(addr string, config ClientConfig) (*Client, error) {
+// NewClient creates and returns a [Client] that uses conn as its transport and configured by
+// config.
+func NewClient(conn net.Conn, config ClientConfig) *Client {
 	c := &Client{
+		conn:                   conn,
 		timeout:                config.Timeout,
 		logger:                 config.Logger,
 		logOutboundAuthPackets: config.LogOutboundAuthPackets,
 	}
-
-	err := c.connect(addr)
-	if err != nil {
-		return nil, err
-	}
-
-	return c, nil
+	c.seq.Store(config.StartingSeq)
+	return c
 }
 
-// connect opens a TCP connection to the RCON server and replaces the receiving Client's underlying
-// connection with the newly opened connection.
-func (c *Client) connect(addr string) error {
-	timeout := c.timeout
-	if timeout == 0 {
-		timeout = DefaultClientTimeout
-	}
-
-	conn, err := net.DialTimeout("tcp", addr, timeout)
-	if err != nil {
-		return err
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// If a connection already exists, try to be nice and close it.
-	if c.conn != nil {
-		_ = c.conn.Close()
-	}
-
-	c.conn = conn
-	return nil
-}
-
-// Reconnect opens a new connection to the RCON server.
-func (c *Client) Reconnect() error {
-	return c.connect(c.conn.RemoteAddr().String())
-}
-
-// Close attempts to close the existing connection to the RCON server.
+// Close simple closes the receiving client's underlying connection.
 func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -108,15 +84,17 @@ func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
-// Request sends the provided [Packet] to the RCON server and returns a response [Packet] provided
-// by the RCON server. When the client is unauthorized, an error is returned alongside the response
-// packet.
+// Request sends the provided [Packet] to the RCON server and returns a response [Packet] and/or an
+// error. When the client receives an authorization error packet in response, it is returned
+// alongside [ErrUnauthorized].
 func (c *Client) Request(ctx context.Context, req Packet) (*Packet, error) {
+	// Specify a result type to communicate the response over the channel.
 	type result struct {
 		packet *Packet
 		err    error
 	}
 
+	// Configure the context with the client's configured timeout, falling back on the default.
 	timeout := c.timeout
 	if timeout == 0 {
 		timeout = DefaultClientTimeout
@@ -125,29 +103,15 @@ func (c *Client) Request(ctx context.Context, req Packet) (*Packet, error) {
 	defer cancel()
 
 	ch := make(chan result)
-	defer close(ch)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Perform the actual request in a goroutine to support timing out.
 	go func() {
-		// If debug logging is enabled, log out the packet hex. Only include outbound authorization
-		// packets when the
-		if c.debugEnabled(ctx) {
-			// Skip outgoing authorization packets which include the server password in plaintext.
-			switch {
-			case req.Type == PacketTypeAuth && !c.logOutboundAuthPackets:
-				break
-			default:
-				bs, err := req.MarshalBinary()
-				if err != nil {
-					ch <- result{nil, err}
-					return
-				}
-				c.debug(ctx, "sent request packet", "hex", hex.EncodeToString(bs))
-			}
-		}
+		defer close(ch)
 
+		c.logPacket(ctx, "sending packet", req)
 		_, err := req.WriteTo(c.conn)
 		if err != nil {
 			ch <- result{nil, err}
@@ -160,19 +124,10 @@ func (c *Client) Request(ctx context.Context, req Packet) (*Packet, error) {
 			ch <- result{nil, err}
 			return
 		}
+		c.logPacket(ctx, "received packet", resp)
 
-		if c.debugEnabled(ctx) {
-			bs, err := resp.MarshalBinary()
-			if err != nil {
-				ch <- result{nil, err}
-				return
-			}
-			c.debug(ctx, "received response packet", "hex", hex.EncodeToString(bs))
-		}
-
-		// Handle authorization errors.
+		// Check for an authorization error.
 		if resp.Type == PacketTypeAuthResponse && resp.ID == -1 {
-			c.err(ctx, "server returned authorization failure")
 			ch <- result{&resp, errors.New("rcon: unauthorized")}
 			return
 		}
@@ -188,106 +143,97 @@ func (c *Client) Request(ctx context.Context, req Packet) (*Packet, error) {
 	}
 }
 
-// Authorize sends the provided password to the connected RCON server.
+// Authorize sends the provided password to the RCON server to authorize the current session.
 func (c *Client) Authorize(ctx context.Context, password string) error {
 	req := Packet{
-		ID:   c.incrementSeq(),
+		ID:   c.loadAndIncrementSeq(),
 		Type: PacketTypeAuth,
 		Body: []byte(password),
 	}
 	_, err := c.Request(ctx, req)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
-// ExecCommand sends the provided command bytes to the server and returns the resulting bytes.
+// ExecCommand sends the provided bytes as a command to the server and returns the response body.
 func (c *Client) ExecCommand(ctx context.Context, cmd []byte) ([]byte, error) {
 	req := Packet{
-		ID:   c.incrementSeq(),
+		ID:   c.loadAndIncrementSeq(),
 		Type: PacketTypeExecCommand,
 		Body: cmd,
 	}
-
 	resp, err := c.Request(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-
 	return resp.Body, nil
 }
 
-// incrementSeq increments and then returns the seq field of the receiving Client. This is done
-// independently of the lock held on the underlying TCP connection. When the value of seq reaches
-// [math.MaxInt32], the value wraps back around to 0.
-func (c *Client) incrementSeq() int32 {
+// loadAndIncrementSeq returns and then increments the receiving client's seq, wrapping around to
+// zero when [math.MaxInt32] is reached.
+func (c *Client) loadAndIncrementSeq() int32 {
+	var seq int32
 	swapped := false
 	for !swapped {
-		seq := c.seq.Load()
-		if seq == math.MaxInt32 {
+		seq = c.seq.Load()
+		switch {
+		case seq < 0:
+			swapped = c.seq.CompareAndSwap(seq, 1)
+			seq = 0
+
+		case seq == math.MaxInt32:
 			swapped = c.seq.CompareAndSwap(seq, 0)
-		} else {
+
+		default:
 			swapped = c.seq.CompareAndSwap(seq, seq+1)
 		}
 	}
-	return c.seq.Load()
+	return seq
 }
 
-// debugEnabled returns whether the receiving Client logger is level set for debug output. This can
-// change based on values in the context, which is why the request context is a parameter.
-func (c *Client) debugEnabled(ctx context.Context) bool {
-	if c.logger == nil {
-		return false
+// logPacket sends a log record containing the provided log message and packet to the client's
+// logger for handling. When the logger is nil or is not level set for debug records, this function
+// is essentially a NOP. If the provided packet is an outbound authorization packet, its body and
+// length are obfuscated to prevent leaking a plaintext password into logs.
+func (c *Client) logPacket(ctx context.Context, logMsg string, packet Packet) {
+	// NOP if the client logger is nil or is not level set for debug log messages.
+	if c.logger == nil || !c.logger.Handler().Enabled(ctx, slog.LevelDebug) {
+		return
 	}
-	return c.logger.Handler().Enabled(ctx, slog.LevelDebug)
-}
 
-// log sends the provided structured log message to the receiving Client's underlying logger. When
-// the logger is nil, this method is essentially a NOP.
-func (c *Client) log(ctx context.Context, level slog.Level, msg string, args ...any) {
-	if c.logger != nil {
-		c.logger.Log(ctx, level, msg, args...)
+	// Unless the client is explicitly configured to log outbound authorization packets, scrub the
+	// password when applicable.
+	if packet.Type == PacketTypeAuth && !c.logOutboundAuthPackets {
+		packet.Body = []byte{'x', 'x', 'x', 'x', 'x'}
 	}
-}
 
-// debug writes the provided structured debug message to the receiving Client's underlying logger.
-// When the logger is nil, this method is essentially a NOP.
-func (c *Client) debug(ctx context.Context, msg string, args ...any) {
-	c.log(ctx, slog.LevelDebug, msg, args...)
-}
+	bs, err := packet.MarshalBinary()
+	if err != nil {
+		c.logger.LogAttrs(ctx, slog.LevelError, "failed to marshal packet for logging", slog.String("error", err.Error()))
+		return
+	}
 
-// info writes the provided structured info message to the receiving Client's underlying logger.
-// When the logger is nil, this method is essentially a NOP.
-func (c *Client) info(ctx context.Context, msg string, args ...any) {
-	c.log(ctx, slog.LevelInfo, msg, args...)
-}
-
-// warn writes the provided structured warn message to the receiving Client's underlying logger.
-// When the logger is nil, this method is essentially a NOP.
-func (c *Client) warn(ctx context.Context, msg string, args ...any) {
-	c.log(ctx, slog.LevelWarn, msg, args...)
-}
-
-// err writes the provided structured error message to the receiving Client's underlying logger.
-// When the logger is nil, this method is essentially a NOP.
-func (c *Client) err(ctx context.Context, msg string, args ...any) {
-	c.log(ctx, slog.LevelError, msg, args...)
+	c.logger.LogAttrs(ctx, slog.LevelDebug, logMsg, slog.String("packet", hex.EncodeToString(bs)))
 }
 
 // ClientConfig contains settings to control [Client] instances.
 type ClientConfig struct {
-	// Timeout controls both of the TCP dial timeout and the overall timeout for any given request.
+	// Timeout limits the amount of time a client can spend performing a request and response round
+	// trip. A value of zero will inform the client to use the [DefaultClientTimeout].
 	Timeout time.Duration
 
-	// Logger is a [slog.Logger] which a [Client] will write log entries to.
+	// StartingSeq is the initial value for a client's packet ID sequence. Any value less than zero
+	// will be ignored.
+	StartingSeq int32
+
+	// Logger receives log entries from a client.
 	Logger *slog.Logger
 
-	// LogOutboundAuthPackets enables the output of outbound authorization packets which include the
-	// server authorization password.
+	// LogOutboundAuthPackets is a flag that must be explicitly enabled when the client is created.
+	// This field enables debug logging to include outbound authorization request packets, exposing
+	// server passwords in plaintext. When this field is false (the default value,) outbound
+	// authorization packets will be sanitized to hide both the password text and packet length.
 	//
-	// WARNING: Enabling this setting will expose server passwords in plain text. Only enable this
-	// if you understand the implications and are willing to accept the risks!
+	// WARNING: Only enable this flag if you are aware of the implications and are willing to accept
+	// the risks!
 	LogOutboundAuthPackets bool
 }
