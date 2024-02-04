@@ -66,8 +66,11 @@ type Client struct {
 	logOutboundAuthPackets bool
 }
 
-// NewClient creates and returns a [Client] that uses conn as its transport and configured by
-// config.
+// NewClient creates and returns a [Client] that uses conn as its transport, configured by the
+// provided config.
+//
+// Once a conn is provided to a NewClient call, the conn should not be used outside of the client
+// in order to ensure reliable message delivery.
 func NewClient(conn net.Conn, config ClientConfig) *Client {
 	c := &Client{
 		conn:                   conn,
