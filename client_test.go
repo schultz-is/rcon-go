@@ -33,7 +33,8 @@ func TestClient(t *testing.T) {
 				var req rcon.Packet
 				_, err := req.ReadFrom(sc)
 				if err != nil {
-					t.Fatalf("Failed to read auth request packet from client: %s", err)
+					t.Errorf("Failed to read auth request packet from client: %s", err)
+					return
 				}
 				resp := rcon.Packet{
 					ID:   0,
@@ -41,7 +42,8 @@ func TestClient(t *testing.T) {
 				}
 				_, err = resp.WriteTo(sc)
 				if err != nil {
-					t.Fatalf("Failed to send auth response packet to client: %s", err)
+					t.Errorf("Failed to send auth response packet to client: %s", err)
+					return
 				}
 			}()
 
@@ -73,11 +75,13 @@ func TestClient(t *testing.T) {
 				var req rcon.Packet
 				_, err := req.ReadFrom(sc)
 				if err != nil {
-					t.Fatalf("Failed to read exec command request packet from client: %s", err)
+					t.Errorf("Failed to read exec command request packet from client: %s", err)
+					return
 				}
-				wantResp.WriteTo(sc)
+				_, err = wantResp.WriteTo(sc)
 				if err != nil {
-					t.Fatalf("Failed to send exec command response packet to client: %s", err)
+					t.Errorf("Failed to send exec command response packet to client: %s", err)
+					return
 				}
 			}()
 
@@ -106,7 +110,8 @@ func TestClient(t *testing.T) {
 				var req rcon.Packet
 				_, err := req.ReadFrom(sc)
 				if err != nil {
-					t.Fatalf("Failed to read exec command request packet from client: %s", err)
+					t.Errorf("Failed to read exec command request packet from client: %s", err)
+					return
 				}
 				resp := rcon.Packet{
 					ID:   -1,
@@ -114,7 +119,8 @@ func TestClient(t *testing.T) {
 				}
 				_, err = resp.WriteTo(sc)
 				if err != nil {
-					t.Fatalf("Failed to send auth response packet to client: %s", err)
+					t.Errorf("Failed to send auth response packet to client: %s", err)
+					return
 				}
 			}()
 
@@ -167,18 +173,21 @@ func TestClient(t *testing.T) {
 				var req rcon.Packet
 				_, err := req.ReadFrom(sc)
 				if err != nil {
-					t.Fatalf("Failed to read exec command request packet from client: %s", err)
+					t.Errorf("Failed to read exec command request packet from client: %s", err)
+					return
 				}
 
 				err = sc.Close()
 				if err != nil {
-					t.Fatalf("Problem closing server: %s", err)
+					t.Errorf("Problem closing server: %s", err)
+					return
 				}
 
 				resp := rcon.Packet{}
 				_, err = resp.WriteTo(sc)
 				if err == nil {
-					t.Fatal("Write to a closed connection unexpectedly succeeded")
+					t.Errorf("Write to a closed connection unexpectedly succeeded")
+					return
 				}
 			}()
 
@@ -228,17 +237,20 @@ func TestClient(t *testing.T) {
 				var req rcon.Packet
 				_, err := req.ReadFrom(sc)
 				if err != nil {
-					t.Fatalf("Failed to read exec command request packet from client: %s", err)
+					t.Errorf("Failed to read exec command request packet from client: %s", err)
+					return
 				}
 
 				if req.ID != 0 {
-					t.Fatalf("Expected request packet to have ID of 0, got: %d", req.ID)
+					t.Errorf("Expected request packet to have ID of 0, got: %d", req.ID)
+					return
 				}
 
 				resp := rcon.Packet{}
 				_, err = resp.WriteTo(sc)
 				if err != nil {
-					t.Fatalf("Failed to write exec command response packet to client: %s", err)
+					t.Errorf("Failed to write exec command response packet to client: %s", err)
+					return
 				}
 			}()
 
@@ -267,31 +279,37 @@ func TestClient(t *testing.T) {
 				var req rcon.Packet
 				_, err := req.ReadFrom(sc)
 				if err != nil {
-					t.Fatalf("Failed to read exec command request packet from client: %s", err)
+					t.Errorf("Failed to read exec command request packet from client: %s", err)
+					return
 				}
 
 				if req.ID != math.MaxInt32 {
-					t.Fatalf("Expected request packet to have ID of math.MaxInt32, got: %d", req.ID)
+					t.Errorf("Expected request packet to have ID of math.MaxInt32, got: %d", req.ID)
+					return
 				}
 
 				resp := rcon.Packet{}
 				_, err = resp.WriteTo(sc)
 				if err != nil {
-					t.Fatalf("Failed to write exec command response packet to client: %s", err)
+					t.Errorf("Failed to write exec command response packet to client: %s", err)
+					return
 				}
 
 				_, err = req.ReadFrom(sc)
 				if err != nil {
-					t.Fatalf("Failed to read exec command request packet from client: %s", err)
+					t.Errorf("Failed to read exec command request packet from client: %s", err)
+					return
 				}
 
 				if req.ID != 0 {
-					t.Fatalf("Expected request packet to have ID of 0, got: %d", req.ID)
+					t.Errorf("Expected request packet to have ID of 0, got: %d", req.ID)
+					return
 				}
 
 				_, err = resp.WriteTo(sc)
 				if err != nil {
-					t.Fatalf("Failed to write exec command response packet to client: %s", err)
+					t.Errorf("Failed to write exec command response packet to client: %s", err)
+					return
 				}
 			}()
 
@@ -329,7 +347,8 @@ func TestClient(t *testing.T) {
 				var req rcon.Packet
 				_, err := req.ReadFrom(sc)
 				if err != nil {
-					t.Fatalf("Failed to read auth request packet from client: %s", err)
+					t.Errorf("Failed to read auth request packet from client: %s", err)
+					return
 				}
 
 				resp := rcon.Packet{
@@ -338,7 +357,8 @@ func TestClient(t *testing.T) {
 				}
 				_, err = resp.WriteTo(sc)
 				if err != nil {
-					t.Fatalf("Failed to write auth response packet to client: %s", err)
+					t.Errorf("Failed to write auth response packet to client: %s", err)
+					return
 				}
 			}()
 
